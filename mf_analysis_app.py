@@ -527,12 +527,6 @@ elif page == "Rolling Returns":
     st.subheader("Statistics")
     st.dataframe(pd.DataFrame(stat_rows), use_container_width=True, hide_index=True)
 
-    st.subheader("Distribution")
-    fig2 = px.histogram(plot_df, x="Return %", color="Name",
-                        barmode="overlay", opacity=0.55, nbins=50)
-    fig2.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig2, use_container_width=True)
-
 
 # ============================================================================
 # PAGE 3 — Category Returns
