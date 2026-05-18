@@ -417,7 +417,7 @@ if page == "Performance Graph":
     items = [(f, "fund") for f in selected_funds] + \
             [(i, "index") for i in selected_indices]
 
-    plot_rows, period_rows = [], []
+    plot_rows = []
     for name, kind in items:
         s_full = get_series(data_dir, name, kind)
         s = s_full[(s_full["Date"] >= start_ts) & (s_full["Date"] <= end_ts)]
@@ -427,14 +427,6 @@ if page == "Performance Graph":
         rebased["Name"] = name
         rebased["Type"] = kind.capitalize()
         plot_rows.append(rebased)
-
-        # Period returns table: compute against full series and end_ts so 1M/3M/etc.
-        # are as-of today, regardless of where the chart starts.
-        prow = {"Name": name, "Type": kind.capitalize()}
-        for plabel in PERIOD_DAYS:
-            r = period_return(s_full, plabel, end_ts)
-            prow[plabel] = round(r * 100, 2) if pd.notna(r) else None
-        period_rows.append(prow)
 
     if not plot_rows:
         st.warning("No data in the selected range.")
@@ -450,39 +442,6 @@ if page == "Performance Graph":
     )
     fig.add_hline(y=100, line_dash="dot", opacity=0.4)
     st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader(f"Period returns (as of {end_ts.date()})")
-    st.caption("≤ 1 year: absolute return. > 1 year: CAGR. Bars scale across each column.")
-
-    pdf = pd.DataFrame(period_rows)
-    cols = ["Name", "Type"] + list(PERIOD_DAYS.keys())
-    pdf = pdf[cols]
-
-    # Use Streamlit's native ProgressColumn for visual emphasis (no matplotlib needed).
-    # Each numeric column gets a horizontal bar scaled to its min/max range, plus the
-    # actual % value displayed inside.
-    column_config = {
-        "Name": st.column_config.TextColumn("Fund / Index", width="large"),
-        "Type": st.column_config.TextColumn("Type", width="small"),
-    }
-    for p in PERIOD_DAYS:
-        vals = pdf[p].dropna()
-        if vals.empty:
-            column_config[p] = st.column_config.NumberColumn(p, format="%.2f%%")
-        else:
-            vmin = float(vals.min())
-            vmax = float(vals.max())
-            # Add a small pad so the smallest bar is still visible
-            pad = max(abs(vmax - vmin) * 0.05, 0.1)
-            column_config[p] = st.column_config.ProgressColumn(
-                p,
-                format="%.2f%%",
-                min_value=vmin - pad,
-                max_value=vmax + pad,
-            )
-
-    st.dataframe(pdf, use_container_width=True, hide_index=True,
-                 column_config=column_config)
 
 
 # ============================================================================
