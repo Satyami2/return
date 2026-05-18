@@ -7,20 +7,20 @@ comparing fund performance against indices, and looking at rolling returns.
 Run with:
     streamlit run mf_analysis_app.py
 
-Folder layout expected (relative to this script):
-    data/
-        flexicap1.xlsx, flexicap2.xlsx
-        largecap1.xlsx, largecap2.xlsx
-        largeandmidcapa.xlsx
-        midcap.xlsx
-        multicap.xlsx
-        smallcap.xlsx
-        nifty50.xlsx
-        nifty500.xlsx
-        nifty_midcap100.xlsx
-        niftysmallcap100.xlsx
+Default: all .xlsx files sit next to this script (same folder). Override the
+folder path from the sidebar at runtime if needed.
 
-You can also override DATA_DIR via the sidebar.
+Expected files:
+    flexicap1.xlsx, flexicap2.xlsx
+    largecap1.xlsx, largecap2.xlsx
+    largeandmidcapa.xlsx
+    midcap.xlsx
+    multicap.xlsx
+    smallcap.xlsx
+    nifty50.xlsx
+    nifty500.xlsx
+    nifty_midcap100.xlsx
+    niftysmallcap100.xlsx
 """
 
 import os
@@ -42,7 +42,7 @@ st.set_page_config(
     layout="wide",
 )
 
-DEFAULT_DATA_DIR = "data"
+DEFAULT_DATA_DIR = "."
 
 # Category -> list of fund excel files (some categories have multiple files)
 CATEGORY_FILES = {
