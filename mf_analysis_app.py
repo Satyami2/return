@@ -1,26 +1,13 @@
 """
 Mutual Fund Analysis Dashboard
 ==============================
-A Streamlit app for analyzing Indian mutual funds across categories,
-comparing fund performance against indices, and looking at rolling returns.
+Streamlit app for analyzing Indian mutual funds across categories,
+comparing fund performance against indices, and inspecting rolling returns.
 
-Run with:
+Run:
     streamlit run mf_analysis_app.py
 
-Default: all .xlsx files sit next to this script (same folder). Override the
-folder path from the sidebar at runtime if needed.
-
-Expected files:
-    flexicap1.xlsx, flexicap2.xlsx
-    largecap1.xlsx, largecap2.xlsx
-    largeandmidcapa.xlsx
-    midcap.xlsx
-    multicap.xlsx
-    smallcap.xlsx
-    nifty50.xlsx
-    nifty500.xlsx
-    nifty_midcap100.xlsx
-    niftysmallcap100.xlsx
+Default: all .xlsx files sit next to this script.
 """
 
 import os
@@ -29,22 +16,32 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 # ----------------------------------------------------------------------------
-# Configuration
+# Config
 # ----------------------------------------------------------------------------
 
-st.set_page_config(
-    page_title="MF Analysis Dashboard",
-    page_icon="📈",
-    layout="wide",
+st.set_page_config(page_title="MF Analysis", page_icon="📈", layout="wide")
+
+# Light global styling — tightens vertical rhythm and softens default streamlit blocks
+st.markdown(
+    """
+    <style>
+        .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+        section[data-testid="stSidebar"] { background-color: #fafafa; }
+        h1 { font-size: 1.8rem !important; margin-bottom: 0.2rem !important; }
+        h2 { font-size: 1.15rem !important; margin-top: 1.2rem !important; }
+        h3 { font-size: 1.0rem !important; margin-top: 1rem !important; }
+        div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+        div[data-testid="stMetricLabel"] { font-size: 0.8rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 DEFAULT_DATA_DIR = "."
 
-# Category -> list of fund excel files (some categories have multiple files)
 CATEGORY_FILES = {
     "Large Cap":          ["largecap1.xlsx", "largecap2.xlsx"],
     "Large & Mid Cap":    ["largeandmidcapa.xlsx"],
@@ -54,7 +51,6 @@ CATEGORY_FILES = {
     "Multi Cap":          ["multicap.xlsx"],
 }
 
-# Available indices
 INDEX_FILES = {
     "NIFTY 50":            "nifty50.xlsx",
     "NIFTY 500":           "nifty500.xlsx",
@@ -62,7 +58,6 @@ INDEX_FILES = {
     "Nifty Smallcap 100":  "niftysmallcap100.xlsx",
 }
 
-# Suggested benchmark index for each category (sensible default)
 CATEGORY_DEFAULT_INDEX = {
     "Large Cap":         "NIFTY 50",
     "Large & Mid Cap":   "NIFTY 500",
@@ -72,7 +67,7 @@ CATEGORY_DEFAULT_INDEX = {
     "Multi Cap":         "NIFTY 500",
 }
 
-# Standard period definitions (in calendar days)
+# Period -> days. Order matters for display.
 PERIOD_DAYS = {
     "1M":  30,
     "3M":  91,
@@ -84,18 +79,11 @@ PERIOD_DAYS = {
 }
 
 # ----------------------------------------------------------------------------
-# Data loading
+# Data loading (cached)
 # ----------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
 def load_fund_file(path: str) -> pd.DataFrame:
-    """Load a fund NAV excel file.
-
-    Layout: row 1 = ' >>NAV Data' banner, row 2 = blank, row 3 = fund names,
-    row 4 = label ('Adjusted NAV NonCorporate(Rs)'), row 5+ = data
-    (Date in col A, NAVs in subsequent cols). Last row(s) may contain a
-    disclaimer footer, which we drop by filtering non-datetime dates.
-    """
     df = pd.read_excel(path, header=2, skiprows=[3])
     df = df.rename(columns={df.columns[0]: "Date"})
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -107,7 +95,6 @@ def load_fund_file(path: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_index_file(path: str) -> pd.DataFrame:
-    """Load an index file. Layout: Index Name | Date | Close Price."""
     df = pd.read_excel(path, header=2)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
@@ -118,19 +105,20 @@ def load_index_file(path: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=True)
 def load_category(data_dir: str, category: str) -> pd.DataFrame:
-    """Load (and merge, if needed) all fund files for a given category.
-    Returns a wide dataframe with Date column and one column per fund.
-    """
+    """Load and merge all fund files for a category. Tolerates missing files
+    (e.g. only largecap1.xlsx present without largecap2.xlsx)."""
     files = CATEGORY_FILES[category]
-    frames = [load_fund_file(os.path.join(data_dir, f)) for f in files]
-    if len(frames) == 1:
-        df = frames[0]
-    else:
-        df = frames[0]
-        for nxt in frames[1:]:
-            df = pd.merge(df, nxt, on="Date", how="outer")
-    df = df.sort_values("Date").reset_index(drop=True)
-    return df
+    frames = []
+    for f in files:
+        path = os.path.join(data_dir, f)
+        if os.path.exists(path):
+            frames.append(load_fund_file(path))
+    if not frames:
+        return pd.DataFrame(columns=["Date"])
+    df = frames[0]
+    for nxt in frames[1:]:
+        df = pd.merge(df, nxt, on="Date", how="outer")
+    return df.sort_values("Date").reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -140,7 +128,7 @@ def load_index(data_dir: str, index_name: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def get_fund_universe(data_dir: str) -> dict:
-    """Return {fund_name: category} mapping across all categories."""
+    """{fund_name: category} across all categories."""
     universe = {}
     for cat in CATEGORY_FILES:
         try:
@@ -153,68 +141,51 @@ def get_fund_universe(data_dir: str) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# Analysis helpers
+# Analysis
 # ----------------------------------------------------------------------------
 
 def get_series(data_dir: str, name: str, kind: str) -> pd.DataFrame:
-    """Return a 2-column DataFrame [Date, Value] for the given fund or index."""
+    """Return [Date, Value] for a fund or index."""
     if kind == "index":
-        idx = load_index(data_dir, name)
-        return idx.rename(columns={"Close Price": "Value"})
-    # else: fund — find its category
-    universe = get_fund_universe(data_dir)
-    cat = universe.get(name)
+        return load_index(data_dir, name).rename(columns={"Close Price": "Value"})
+    cat = get_fund_universe(data_dir).get(name)
     if cat is None:
         return pd.DataFrame(columns=["Date", "Value"])
     df = load_category(data_dir, cat)
-    out = df[["Date", name]].dropna().rename(columns={name: "Value"})
-    return out.reset_index(drop=True)
+    return df[["Date", name]].dropna().rename(columns={name: "Value"}).reset_index(drop=True)
 
 
-def cagr(start_val: float, end_val: float, years: float) -> float:
-    """Compound Annual Growth Rate as a decimal (0.12 = 12%)."""
-    if start_val <= 0 or end_val <= 0 or years <= 0:
+def cagr(start_val, end_val, years):
+    if start_val is None or end_val is None or start_val <= 0 or end_val <= 0 or years <= 0:
         return np.nan
     return (end_val / start_val) ** (1 / years) - 1
 
 
-def value_near(series: pd.DataFrame, target_date: pd.Timestamp,
-               tolerance_days: int = 7) -> tuple:
-    """Pick the nearest available (Date, Value) at or before target_date.
-
-    Falls back to the nearest date on either side within tolerance_days.
-    Returns (None, None) if nothing close is available.
-    """
+def value_near(series: pd.DataFrame, target_date: pd.Timestamp, tolerance_days: int = 7):
+    """Last value at or before target_date, falling back to closest within tolerance."""
     if series.empty:
         return None, None
     s = series.sort_values("Date").reset_index(drop=True)
-    # Prefer the last value at or before target
     at_or_before = s[s["Date"] <= target_date]
     if not at_or_before.empty:
         row = at_or_before.iloc[-1]
-        # Verify it's within tolerance — otherwise it might be way too old
         if (target_date - row["Date"]).days <= tolerance_days * 5:
             return row["Date"], row["Value"]
-    # Else: pick the closest date overall within tolerance
-    s["diff"] = (s["Date"] - target_date).abs()
+    s = s.assign(diff=(s["Date"] - target_date).abs())
     row = s.loc[s["diff"].idxmin()]
     if row["diff"].days <= tolerance_days:
         return row["Date"], row["Value"]
     return None, None
 
 
-def period_return(series: pd.DataFrame, period_label: str,
-                  as_of: pd.Timestamp) -> float:
-    """Return for a standard period. Annualised (CAGR) if > 1 year,
-    else absolute return (both as decimals)."""
+def period_return(series: pd.DataFrame, period_label: str, as_of: pd.Timestamp):
+    """Absolute return for periods <=1Y, CAGR for >1Y."""
     days = PERIOD_DAYS[period_label]
     target_start = as_of - pd.Timedelta(days=days)
-
     _, end_val = value_near(series, as_of)
     _, start_val = value_near(series, target_start)
     if start_val is None or end_val is None:
         return np.nan
-
     years = days / 365.0
     if years > 1:
         return cagr(start_val, end_val, years)
@@ -222,19 +193,16 @@ def period_return(series: pd.DataFrame, period_label: str,
 
 
 def rolling_returns(series: pd.DataFrame, window_years: int) -> pd.DataFrame:
-    """Daily rolling CAGR over a `window_years` window. Returns df[Date, Return]."""
     if series.empty:
         return pd.DataFrame(columns=["Date", "Return"])
     s = series.sort_values("Date").set_index("Date").asfreq("D").ffill()
     window_days = int(round(window_years * 365.25))
     shifted = s["Value"].shift(window_days)
     cagr_series = (s["Value"] / shifted) ** (1 / window_years) - 1
-    out = pd.DataFrame({"Date": s.index, "Return": cagr_series.values})
-    return out.dropna().reset_index(drop=True)
+    return pd.DataFrame({"Date": s.index, "Return": cagr_series.values}).dropna().reset_index(drop=True)
 
 
 def normalize_to_100(series: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataFrame:
-    """Rebase a series to 100 on/after `start_date`."""
     s = series[series["Date"] >= start_date].sort_values("Date").reset_index(drop=True)
     if s.empty:
         return s
@@ -247,7 +215,49 @@ def normalize_to_100(series: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataF
 
 
 # ----------------------------------------------------------------------------
-# Sidebar — data dir + navigation
+# UI helpers
+# ----------------------------------------------------------------------------
+
+def fund_picker(label_prefix: str, universe: dict, key_prefix: str,
+                max_funds=None, default_count: int = 2):
+    """Render Category filter + Fund multiselect. Returns list of fund names."""
+    cat_options = ["All categories"] + list(CATEGORY_FILES.keys())
+    cat = st.selectbox(f"{label_prefix} — category filter",
+                       options=cat_options, index=0, key=f"{key_prefix}_cat")
+
+    if cat == "All categories":
+        filtered = sorted(universe.keys())
+    else:
+        filtered = sorted([f for f, c in universe.items() if c == cat])
+
+    if not filtered:
+        st.info("No funds in this category.")
+        return []
+
+    default = filtered[:default_count] if len(filtered) >= default_count else filtered
+    kwargs = dict(
+        options=filtered,
+        default=default,
+        key=f"{key_prefix}_sel",
+        help="Type to search. Use the category filter above to narrow.",
+    )
+    if max_funds is not None:
+        kwargs["max_selections"] = max_funds
+    return st.multiselect(label_prefix, **kwargs)
+
+
+def latest_inception(data_dir: str, fund_names: list):
+    """Most recent inception date across selected funds. Anchors the chart."""
+    starts = []
+    for f in fund_names:
+        s = get_series(data_dir, f, "fund")
+        if not s.empty:
+            starts.append(s["Date"].min())
+    return max(starts) if starts else None
+
+
+# ----------------------------------------------------------------------------
+# Sidebar
 # ----------------------------------------------------------------------------
 
 st.sidebar.title("📈 MF Analysis")
@@ -255,172 +265,166 @@ data_dir = st.sidebar.text_input("Data folder", value=DEFAULT_DATA_DIR,
                                  help="Folder containing the .xlsx files")
 
 if not os.path.isdir(data_dir):
-    st.error(f"Data folder `{data_dir}` not found. "
-             f"Place all the .xlsx files in this folder, or update the path in the sidebar.")
+    st.error(f"Data folder `{data_dir}` not found. Update the path in the sidebar.")
     st.stop()
 
 page = st.sidebar.radio(
     "Analysis",
-    ["1. Performance Graph",
-     "2. Rolling Returns",
-     "3. Category Leaderboard"],
+    ["Performance Graph", "Rolling Returns", "Category Leaderboard"],
 )
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
-    "Returns are calculated from Adjusted NAVs. Periods > 1Y are shown as "
-    "CAGR; ≤ 1Y are absolute returns. NAV gaps are forward-filled for "
-    "rolling-return computations."
+    "Returns from Adjusted NAVs. Periods > 1Y are CAGR; ≤ 1Y are absolute. "
+    "NAV gaps are forward-filled for rolling computations."
 )
 
-# Build a flat list of all funds with category tag (used by pages 1 & 2)
 with st.spinner("Indexing fund universe..."):
     universe = get_fund_universe(data_dir)
 
-# Pretty label "Fund Name (Category)" for selectors
-fund_labels = sorted([f"{name} — {cat}" for name, cat in universe.items()])
-label_to_fund = {f"{name} — {cat}": name for name, cat in universe.items()}
 index_options = list(INDEX_FILES.keys())
 
 
-# ----------------------------------------------------------------------------
-# Page 1 — Performance graph
-# ----------------------------------------------------------------------------
+# ============================================================================
+# PAGE 1 — Performance Graph
+# ============================================================================
 
-if page == "1. Performance Graph":
+if page == "Performance Graph":
     st.title("Performance Comparison")
-    st.caption("Pick any start date and compare funds/indices, all rebased to 100.")
+    st.caption("Compare funds and indices rebased to 100. The chart auto-starts "
+               "from the most recent fund's inception so every line begins together.")
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        selected_labels = st.multiselect(
-            "Select funds",
-            options=fund_labels,
-            default=fund_labels[:2] if len(fund_labels) >= 2 else fund_labels,
-            help="Pick one or more funds to compare.",
-        )
+    sel_col, date_col = st.columns([3, 2], gap="large")
+
+    with sel_col:
+        selected_funds = fund_picker("Funds", universe, key_prefix="p1",
+                                     default_count=2)
         selected_indices = st.multiselect(
-            "Select indices",
-            options=index_options,
-            default=["NIFTY 50"],
+            "Indices", options=index_options, default=["NIFTY 50"], key="p1_idx",
         )
-    with col2:
-        # Determine valid date range
-        today = date.today()
-        default_start = today - timedelta(days=365 * 3)
-        start_date = st.date_input("Start date", value=default_start,
-                                   min_value=date(1990, 1, 1),
-                                   max_value=today)
-        end_date = st.date_input("End date", value=today,
-                                 min_value=start_date,
-                                 max_value=today)
 
-    if not selected_labels and not selected_indices:
-        st.info("Pick at least one fund or index above to plot.")
+    today = date.today()
+    auto_start = latest_inception(data_dir, selected_funds)
+    suggested_start = auto_start.date() if auto_start is not None \
+        else today - timedelta(days=365 * 3)
+
+    with date_col:
+        use_auto = st.toggle(
+            "Auto-start from most recent fund",
+            value=True,
+            help="When on, the chart begins on the inception date of the latest fund selected.",
+        )
+        if use_auto and auto_start is not None:
+            start_date = suggested_start
+            st.text_input("Start date", value=str(suggested_start),
+                          disabled=True, key="p1_sd_disp")
+        else:
+            start_date = st.date_input(
+                "Start date", value=suggested_start,
+                min_value=date(1990, 1, 1), max_value=today, key="p1_sd",
+            )
+        end_date = st.date_input(
+            "End date", value=today,
+            min_value=start_date, max_value=today, key="p1_ed",
+        )
+
+    if not selected_funds and not selected_indices:
+        st.info("Pick at least one fund or index above.")
         st.stop()
 
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
 
-    # Collect all series
-    plot_rows = []
-    summary_rows = []
-
-    selected_funds = [label_to_fund[lbl] for lbl in selected_labels]
     items = [(f, "fund") for f in selected_funds] + \
             [(i, "index") for i in selected_indices]
 
+    plot_rows, period_rows = [], []
     for name, kind in items:
-        s = get_series(data_dir, name, kind)
-        s = s[(s["Date"] >= start_ts) & (s["Date"] <= end_ts)]
+        s_full = get_series(data_dir, name, kind)
+        s = s_full[(s_full["Date"] >= start_ts) & (s_full["Date"] <= end_ts)]
         if s.empty:
-            summary_rows.append({"Name": name, "Type": kind, "Note": "No data in range"})
             continue
         rebased = normalize_to_100(s, start_ts)
         rebased["Name"] = name
         rebased["Type"] = kind.capitalize()
         plot_rows.append(rebased)
 
-        # Summary stats
-        actual_start, start_val = value_near(s, start_ts)
-        actual_end, end_val = value_near(s, end_ts)
-        if start_val and end_val:
-            yrs = (actual_end - actual_start).days / 365.25
-            abs_ret = (end_val / start_val - 1) * 100
-            ann_ret = (cagr(start_val, end_val, yrs) * 100) if yrs > 0 else np.nan
-            summary_rows.append({
-                "Name": name,
-                "Type": kind.capitalize(),
-                "From": actual_start.strftime("%Y-%m-%d"),
-                "To": actual_end.strftime("%Y-%m-%d"),
-                "Years": round(yrs, 2),
-                "Total Return %": round(abs_ret, 2),
-                "CAGR %": round(ann_ret, 2) if not np.isnan(ann_ret) else None,
-            })
+        # Period returns table: compute against full series and end_ts so 1M/3M/etc.
+        # are as-of today, regardless of where the chart starts.
+        prow = {"Name": name, "Type": kind.capitalize()}
+        for plabel in PERIOD_DAYS:
+            r = period_return(s_full, plabel, end_ts)
+            prow[plabel] = round(r * 100, 2) if pd.notna(r) else None
+        period_rows.append(prow)
 
-    if plot_rows:
-        plot_df = pd.concat(plot_rows, ignore_index=True)
-        fig = px.line(plot_df, x="Date", y="Value", color="Name",
-                      line_dash="Type",
-                      labels={"Value": "Rebased to 100"})
-        fig.update_layout(height=520, hovermode="x unified",
-                          legend_title="")
-        fig.add_hline(y=100, line_dash="dot", opacity=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+    if not plot_rows:
+        st.warning("No data in the selected range.")
+        st.stop()
 
-        if summary_rows:
-            st.subheader("Period summary")
-            sdf = pd.DataFrame(summary_rows)
-            st.dataframe(sdf, use_container_width=True, hide_index=True)
-    else:
-        st.warning("No data available in the selected date range.")
+    plot_df = pd.concat(plot_rows, ignore_index=True)
+    fig = px.line(plot_df, x="Date", y="Value", color="Name",
+                  line_dash="Type", labels={"Value": "Rebased to 100"})
+    fig.update_layout(
+        height=500, hovermode="x unified", legend_title="",
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25),
+    )
+    fig.add_hline(y=100, line_dash="dot", opacity=0.4)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader(f"Period returns (as of {end_ts.date()})")
+    st.caption("≤ 1 year: absolute return. > 1 year: CAGR. Values in %.")
+
+    pdf = pd.DataFrame(period_rows)
+    cols = ["Name", "Type"] + list(PERIOD_DAYS.keys())
+    pdf = pdf[cols]
+    numeric_cols = list(PERIOD_DAYS.keys())
+    styled = (
+        pdf.style
+        .format({c: "{:.2f}" for c in numeric_cols}, na_rep="—")
+        .background_gradient(subset=numeric_cols, cmap="RdYlGn", axis=0)
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
-# ----------------------------------------------------------------------------
-# Page 2 — Rolling returns
-# ----------------------------------------------------------------------------
+# ============================================================================
+# PAGE 2 — Rolling Returns
+# ============================================================================
 
-elif page == "2. Rolling Returns":
-    st.title("Rolling Returns Comparison")
-    st.caption("Daily rolling CAGR over a chosen window. Compare 1Y, 3Y, or 5Y rolling returns "
-               "across 2–3 funds and an index.")
+elif page == "Rolling Returns":
+    st.title("Rolling Returns")
+    st.caption("Daily rolling CAGR over a chosen window. Compare 1Y, 3Y, or 5Y "
+               "rolling returns across funds and an index.")
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        selected_labels = st.multiselect(
-            "Select up to 3 funds",
-            options=fund_labels,
-            default=fund_labels[:2] if len(fund_labels) >= 2 else fund_labels,
-            max_selections=3,
-        )
+    sel_col, opt_col = st.columns([3, 2], gap="large")
+
+    with sel_col:
+        selected_funds = fund_picker("Funds (up to 3)", universe,
+                                     key_prefix="p2", max_funds=3,
+                                     default_count=2)
         selected_indices = st.multiselect(
-            "Select indices",
-            options=index_options,
-            default=["NIFTY 50"],
+            "Indices", options=index_options, default=["NIFTY 50"], key="p2_idx",
         )
-    with col2:
-        window = st.radio("Rolling window",
-                          options=[1, 3, 5],
-                          index=1,
-                          format_func=lambda x: f"{x}-Year")
+
+    with opt_col:
+        window = st.radio("Rolling window", options=[1, 3, 5], index=1,
+                          format_func=lambda x: f"{x}-Year", horizontal=True)
         today = date.today()
         default_start = today - timedelta(days=365 * 10)
         start_date = st.date_input("Plot from", value=default_start,
                                    min_value=date(1990, 1, 1),
-                                   max_value=today)
+                                   max_value=today, key="p2_sd")
 
-    if not selected_labels and not selected_indices:
+    if not selected_funds and not selected_indices:
         st.info("Pick at least one fund or index above.")
         st.stop()
 
     start_ts = pd.Timestamp(start_date)
 
-    plot_rows = []
-    stat_rows = []
-    selected_funds = [label_to_fund[lbl] for lbl in selected_labels]
     items = [(f, "fund") for f in selected_funds] + \
             [(i, "index") for i in selected_indices]
 
+    plot_rows, stat_rows = [], []
     for name, kind in items:
         s = get_series(data_dir, name, kind)
         if s.empty:
@@ -428,13 +432,13 @@ elif page == "2. Rolling Returns":
         rr = rolling_returns(s, window)
         rr = rr[rr["Date"] >= start_ts]
         if rr.empty:
-            stat_rows.append({"Name": name, "Note": "Not enough history for this window"})
+            stat_rows.append({"Name": name, "Type": kind.capitalize(),
+                              "Note": "Not enough history"})
             continue
         rr["Name"] = name
         rr["Type"] = kind.capitalize()
         rr["Return %"] = rr["Return"] * 100
         plot_rows.append(rr)
-
         stat_rows.append({
             "Name": name,
             "Type": kind.capitalize(),
@@ -447,48 +451,49 @@ elif page == "2. Rolling Returns":
             "Obs":      len(rr),
         })
 
-    if plot_rows:
-        plot_df = pd.concat(plot_rows, ignore_index=True)
-        fig = px.line(plot_df, x="Date", y="Return %", color="Name",
-                      line_dash="Type",
-                      labels={"Return %": f"{window}Y Rolling CAGR (%)"})
-        fig.update_layout(height=520, hovermode="x unified", legend_title="")
-        fig.add_hline(y=0, line_dash="dot", opacity=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+    if not plot_rows:
+        st.warning("No rolling-return data computed for the current selections.")
+        st.stop()
 
-        st.subheader("Rolling-return statistics")
-        st.dataframe(pd.DataFrame(stat_rows), use_container_width=True, hide_index=True)
+    plot_df = pd.concat(plot_rows, ignore_index=True)
+    fig = px.line(plot_df, x="Date", y="Return %", color="Name",
+                  line_dash="Type",
+                  labels={"Return %": f"{window}Y Rolling CAGR (%)"})
+    fig.update_layout(
+        height=500, hovermode="x unified", legend_title="",
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25),
+    )
+    fig.add_hline(y=0, line_dash="dot", opacity=0.4)
+    st.plotly_chart(fig, use_container_width=True)
 
-        # Distribution view
-        st.subheader("Distribution of rolling returns")
-        fig2 = px.histogram(plot_df, x="Return %", color="Name",
-                            barmode="overlay", opacity=0.55,
-                            nbins=50)
-        fig2.update_layout(height=380)
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.warning("No rolling-return data could be computed for the current selections.")
+    st.subheader("Statistics")
+    st.dataframe(pd.DataFrame(stat_rows), use_container_width=True, hide_index=True)
+
+    st.subheader("Distribution")
+    fig2 = px.histogram(plot_df, x="Return %", color="Name",
+                        barmode="overlay", opacity=0.55, nbins=50)
+    fig2.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig2, use_container_width=True)
 
 
-# ----------------------------------------------------------------------------
-# Page 3 — Category leaderboard
-# ----------------------------------------------------------------------------
+# ============================================================================
+# PAGE 3 — Category Leaderboard
+# ============================================================================
 
-elif page == "3. Category Leaderboard":
+elif page == "Category Leaderboard":
     st.title("Category Leaderboard")
-    st.caption("Rank every fund in a category by return for a chosen period. "
-               "Periods > 1Y are annualised (CAGR).")
+    st.caption("Rank every fund in a category by return for a chosen period.")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    c1, c2, c3 = st.columns(3)
+    with c1:
         category = st.selectbox("Category", options=list(CATEGORY_FILES.keys()))
-    with col2:
+    with c2:
         period = st.selectbox("Period", options=list(PERIOD_DAYS.keys()), index=3)
-    with col3:
+    with c3:
         today = date.today()
         as_of = st.date_input("As of", value=today,
-                              min_value=date(1995, 1, 1),
-                              max_value=today)
+                              min_value=date(1995, 1, 1), max_value=today)
 
     show_benchmark = st.checkbox(
         f"Show benchmark ({CATEGORY_DEFAULT_INDEX[category]})", value=True
@@ -533,16 +538,16 @@ elif page == "3. Category Leaderboard":
     if benchmark_row is not None:
         bench_pct = benchmark_row["Return %"]
         n_beat = (df["Return %"] > bench_pct).sum()
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Funds with data", len(df))
-        c2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
-        c3.metric("Benchmark %", f"{bench_pct:.2f}")
-        c4.metric("Funds beating benchmark", f"{n_beat} / {len(df)}")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Funds with data", len(df))
+        m2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
+        m3.metric("Benchmark %", f"{bench_pct:.2f}")
+        m4.metric("Funds beating benchmark", f"{n_beat} / {len(df)}")
     else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Funds with data", len(df))
-        c2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
-        c3.metric("Median return %", f"{df['Return %'].median():.2f}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Funds with data", len(df))
+        m2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
+        m3.metric("Median return %", f"{df['Return %'].median():.2f}")
 
     label = "CAGR %" if PERIOD_DAYS[period] > 365 else "Total Return %"
     plot_df = df.rename(columns={"Return %": label}).copy()
@@ -556,14 +561,14 @@ elif page == "3. Category Leaderboard":
 
     fig = px.bar(
         plot_df.sort_values(label, ascending=True),
-        x=label,
-        y="Fund",
-        orientation="h",
-        color=label,
-        color_continuous_scale="RdYlGn",
+        x=label, y="Fund", orientation="h",
+        color=label, color_continuous_scale="RdYlGn",
     )
-    fig.update_layout(height=max(420, 24 * len(plot_df)),
-                      yaxis_title="", coloraxis_showscale=False)
+    fig.update_layout(
+        height=max(420, 24 * len(plot_df)),
+        yaxis_title="", coloraxis_showscale=False,
+        margin=dict(l=10, r=10, t=10, b=10),
+    )
     if benchmark_row is not None:
         fig.add_vline(x=benchmark_row["Return %"], line_dash="dash",
                       line_color="black", opacity=0.6,
