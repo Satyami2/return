@@ -36,49 +36,74 @@ st.markdown(
         div[data-testid="stMetricValue"] { font-size: 1.4rem; }
         div[data-testid="stMetricLabel"] { font-size: 0.8rem; }
 
-        /* Sidebar — soft, clean, with subtle separator from main content */
+        /* ============ SIDEBAR ============ */
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #f7f8fa 0%, #f0f2f6 100%);
-            border-right: 1px solid #e1e4ea;
+            background: #ffffff;
+            border-right: 1px solid #e5e7eb;
         }
-        section[data-testid="stSidebar"] .block-container {
+        section[data-testid="stSidebar"] > div:first-child {
             padding-top: 1.5rem;
         }
+        /* Default dark text for everything in sidebar */
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] div {
+            color: #111827 !important;
+        }
+        /* Sidebar title */
         section[data-testid="stSidebar"] h1 {
-            font-size: 1.3rem !important;
-            margin-bottom: 1rem !important;
-            color: #1a1d23;
+            font-size: 1.4rem !important;
+            margin-bottom: 0.25rem !important;
+            color: #111827 !important;
+            font-weight: 700 !important;
             letter-spacing: -0.01em;
         }
-        section[data-testid="stSidebar"] label {
-            font-size: 0.78rem !important;
+        /* Muted caption / help text */
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *,
+        section[data-testid="stSidebar"] small {
+            color: #6b7280 !important;
+            font-size: 0.82rem !important;
+            line-height: 1.45 !important;
+        }
+        /* Section header labels (the "Navigation" markdown bold) */
+        section[data-testid="stSidebar"] strong {
+            color: #6b7280 !important;
+            font-size: 0.72rem !important;
             font-weight: 600 !important;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #4a5160 !important;
+            letter-spacing: 0.08em;
         }
+        /* Dividers */
         section[data-testid="stSidebar"] hr {
-            margin: 1.2rem 0;
-            border-color: #d8dce3;
+            margin: 1rem 0 0.6rem 0;
+            border-color: #e5e7eb;
         }
-        section[data-testid="stSidebar"] small,
-        section[data-testid="stSidebar"] .stCaption {
-            color: #6b7280 !important;
-            font-size: 0.78rem !important;
-            line-height: 1.4 !important;
-        }
-        /* Make the radio navigation feel more like a sidebar menu */
+        /* Radio nav: bigger, no caps */
         section[data-testid="stSidebar"] div[role="radiogroup"] label {
-            text-transform: none !important;
-            letter-spacing: 0 !important;
-            font-size: 0.92rem !important;
+            font-size: 0.95rem !important;
             font-weight: 500 !important;
-            color: #1a1d23 !important;
-            padding: 0.35rem 0;
+            color: #1f2937 !important;
+            padding: 0.4rem 0;
+            cursor: pointer;
         }
-        /* Text input inside sidebar — slightly more refined */
+        section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+            color: #2563eb !important;
+        }
+        /* Expander label */
+        section[data-testid="stSidebar"] summary,
+        section[data-testid="stSidebar"] summary * {
+            color: #374151 !important;
+            font-weight: 500 !important;
+            font-size: 0.9rem !important;
+        }
+        /* Inputs in sidebar */
         section[data-testid="stSidebar"] input[type="text"] {
             font-size: 0.85rem !important;
+            color: #111827 !important;
+            background: #ffffff !important;
         }
     </style>
     """,
@@ -312,7 +337,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**Navigation**")
 page = st.sidebar.radio(
     "Navigation",
-    ["Performance Graph", "Rolling Returns", "Category Leaderboard"],
+    ["Performance Graph", "Rolling Returns", "Category Returns"],
     label_visibility="collapsed",
 )
 
@@ -551,110 +576,138 @@ elif page == "Rolling Returns":
 
 
 # ============================================================================
-# PAGE 3 — Category Leaderboard
+# PAGE 3 — Category Returns
 # ============================================================================
 
-elif page == "Category Leaderboard":
-    st.title("Category Leaderboard")
-    st.caption("Rank every fund in a category by return for a chosen period.")
+elif page == "Category Returns":
+    st.title("Category Returns")
+    st.caption("Every fund in the chosen category, with returns across all standard "
+               "periods. ≤ 1 year shows absolute return; > 1 year shows CAGR.")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
         category = st.selectbox("Category", options=list(CATEGORY_FILES.keys()))
     with c2:
-        period = st.selectbox("Period", options=list(PERIOD_DAYS.keys()), index=3)
-    with c3:
         today = date.today()
         as_of = st.date_input("As of", value=today,
                               min_value=date(1995, 1, 1), max_value=today)
+    with c3:
+        sort_period = st.selectbox(
+            "Sort by",
+            options=list(PERIOD_DAYS.keys()),
+            index=4,  # default to 3Y
+            help="Sort the table by this period's return (descending)",
+        )
 
     show_benchmark = st.checkbox(
-        f"Show benchmark ({CATEGORY_DEFAULT_INDEX[category]})", value=True
+        f"Include benchmark ({CATEGORY_DEFAULT_INDEX[category]})", value=True
     )
 
     as_of_ts = pd.Timestamp(as_of)
     cat_df = load_category(data_dir, category)
     funds = [c for c in cat_df.columns if c != "Date"]
 
+    # Build one row per fund with returns across all periods
     rows = []
     for fund in funds:
         s = cat_df[["Date", fund]].dropna().rename(columns={fund: "Value"})
         if s.empty:
             continue
-        ret = period_return(s, period, as_of_ts)
-        if not np.isnan(ret):
-            rows.append({
-                "Fund": fund,
-                "Return %": round(ret * 100, 2),
-                "Data start": s["Date"].min().strftime("%Y-%m-%d"),
-            })
+        row = {"Fund": fund, "Data start": s["Date"].min().strftime("%Y-%m-%d")}
+        any_data = False
+        for plabel in PERIOD_DAYS:
+            r = period_return(s, plabel, as_of_ts)
+            if pd.notna(r):
+                row[plabel] = round(r * 100, 2)
+                any_data = True
+            else:
+                row[plabel] = None
+        if any_data:
+            rows.append(row)
 
+    if not rows:
+        st.warning("No funds in this category have enough data.")
+        st.stop()
+
+    df = pd.DataFrame(rows)
+
+    # Optionally add benchmark as a separate row at the top
     benchmark_row = None
     if show_benchmark:
         idx_name = CATEGORY_DEFAULT_INDEX[category]
         idx = load_index(data_dir, idx_name).rename(columns={"Close Price": "Value"})
-        ret = period_return(idx, period, as_of_ts)
-        if not np.isnan(ret):
-            benchmark_row = {
-                "Fund": f"⭐ {idx_name} (benchmark)",
-                "Return %": round(ret * 100, 2),
-                "Data start": idx["Date"].min().strftime("%Y-%m-%d"),
-            }
+        brow = {"Fund": f"⭐ {idx_name} (benchmark)",
+                "Data start": idx["Date"].min().strftime("%Y-%m-%d")}
+        for plabel in PERIOD_DAYS:
+            r = period_return(idx, plabel, as_of_ts)
+            brow[plabel] = round(r * 100, 2) if pd.notna(r) else None
+        benchmark_row = brow
 
-    if not rows:
-        st.warning("No funds in this category have enough data for the chosen period.")
-        st.stop()
+    # Sort by chosen period
+    df_sorted = df.sort_values(sort_period, ascending=False, na_position="last").reset_index(drop=True)
 
-    df = pd.DataFrame(rows).sort_values("Return %", ascending=False).reset_index(drop=True)
-    df.insert(0, "Rank", df.index + 1)
-
-    if benchmark_row is not None:
-        bench_pct = benchmark_row["Return %"]
-        n_beat = (df["Return %"] > bench_pct).sum()
+    # Summary metrics
+    if benchmark_row is not None and benchmark_row.get(sort_period) is not None:
+        bench_val = benchmark_row[sort_period]
+        n_beat = (df_sorted[sort_period] > bench_val).sum()
+        n_total = df_sorted[sort_period].notna().sum()
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Funds with data", len(df))
-        m2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
-        m3.metric("Benchmark %", f"{bench_pct:.2f}")
-        m4.metric("Funds beating benchmark", f"{n_beat} / {len(df)}")
+        m1.metric("Funds in category", len(df_sorted))
+        m2.metric(f"Top {sort_period} return", f"{df_sorted[sort_period].iloc[0]:.2f}%")
+        m3.metric(f"Benchmark {sort_period}", f"{bench_val:.2f}%")
+        m4.metric(f"Beating benchmark ({sort_period})", f"{n_beat} / {n_total}")
     else:
         m1, m2, m3 = st.columns(3)
-        m1.metric("Funds with data", len(df))
-        m2.metric("Top return %", f"{df['Return %'].iloc[0]:.2f}")
-        m3.metric("Median return %", f"{df['Return %'].median():.2f}")
+        m1.metric("Funds in category", len(df_sorted))
+        if df_sorted[sort_period].notna().any():
+            m2.metric(f"Top {sort_period} return", f"{df_sorted[sort_period].max():.2f}%")
+            m3.metric(f"Median {sort_period} return", f"{df_sorted[sort_period].median():.2f}%")
 
-    label = "CAGR %" if PERIOD_DAYS[period] > 365 else "Total Return %"
-    plot_df = df.rename(columns={"Return %": label}).copy()
+    # Final table: benchmark on top (if any), then funds
     if benchmark_row is not None:
-        plot_df = pd.concat(
-            [plot_df,
-             pd.DataFrame([{**benchmark_row, "Rank": "—"}]).rename(
-                 columns={"Return %": label})],
-            ignore_index=True,
-        )
+        display_df = pd.concat([pd.DataFrame([benchmark_row]), df_sorted], ignore_index=True)
+    else:
+        display_df = df_sorted
 
-    fig = px.bar(
-        plot_df.sort_values(label, ascending=True),
-        x=label, y="Fund", orientation="h",
-        color=label, color_continuous_scale="RdYlGn",
+    # Column ordering: Fund | Data start | period columns in order
+    col_order = ["Fund", "Data start"] + list(PERIOD_DAYS.keys())
+    display_df = display_df[col_order]
+
+    # Build column_config with progress bars per period column (scaled per column)
+    column_config = {
+        "Fund": st.column_config.TextColumn("Fund / Benchmark", width="large"),
+        "Data start": st.column_config.TextColumn("Data start", width="small"),
+    }
+    for p in PERIOD_DAYS:
+        vals = display_df[p].dropna()
+        if vals.empty:
+            column_config[p] = st.column_config.NumberColumn(p, format="%.2f%%")
+        else:
+            vmin = float(vals.min())
+            vmax = float(vals.max())
+            pad = max(abs(vmax - vmin) * 0.05, 0.1)
+            column_config[p] = st.column_config.ProgressColumn(
+                p,
+                format="%.2f%%",
+                min_value=vmin - pad,
+                max_value=vmax + pad,
+            )
+
+    st.subheader(f"{category} — returns as of {as_of_ts.date()}")
+    st.caption(f"Sorted by {sort_period} (descending). "
+               f"Bars are scaled within each column so the leader for each period is most filled.")
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config,
+        height=min(600, 40 + 36 * len(display_df)),
     )
-    fig.update_layout(
-        height=max(420, 24 * len(plot_df)),
-        yaxis_title="", coloraxis_showscale=False,
-        margin=dict(l=10, r=10, t=10, b=10),
+
+    csv = display_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download CSV", data=csv,
+        file_name=f"{category}_returns_{as_of_ts.date()}.csv",
+        mime="text/csv",
     )
-    if benchmark_row is not None:
-        fig.add_vline(x=benchmark_row["Return %"], line_dash="dash",
-                      line_color="black", opacity=0.6,
-                      annotation_text="Benchmark", annotation_position="top")
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Leaderboard")
-    show_df = df.rename(columns={"Return %": label})
-    if benchmark_row is not None:
-        st.caption(f"Benchmark — **{benchmark_row['Fund']}**: {benchmark_row['Return %']}%")
-    st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-    csv = show_df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download leaderboard CSV", data=csv,
-                       file_name=f"{category}_{period}_leaderboard.csv",
-                       mime="text/csv")
