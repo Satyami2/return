@@ -28,13 +28,58 @@ st.set_page_config(page_title="MF Analysis", page_icon="📈", layout="wide")
 st.markdown(
     """
     <style>
+        /* Main content rhythm */
         .block-container { padding-top: 2rem; padding-bottom: 2rem; }
-        section[data-testid="stSidebar"] { background-color: #fafafa; }
-        h1 { font-size: 1.8rem !important; margin-bottom: 0.2rem !important; }
-        h2 { font-size: 1.15rem !important; margin-top: 1.2rem !important; }
-        h3 { font-size: 1.0rem !important; margin-top: 1rem !important; }
+        h1 { font-size: 1.85rem !important; margin-bottom: 0.2rem !important; font-weight: 700 !important; }
+        h2 { font-size: 1.15rem !important; margin-top: 1.2rem !important; font-weight: 600 !important; }
+        h3 { font-size: 1.0rem !important; margin-top: 1rem !important; font-weight: 600 !important; }
         div[data-testid="stMetricValue"] { font-size: 1.4rem; }
         div[data-testid="stMetricLabel"] { font-size: 0.8rem; }
+
+        /* Sidebar — soft, clean, with subtle separator from main content */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #f7f8fa 0%, #f0f2f6 100%);
+            border-right: 1px solid #e1e4ea;
+        }
+        section[data-testid="stSidebar"] .block-container {
+            padding-top: 1.5rem;
+        }
+        section[data-testid="stSidebar"] h1 {
+            font-size: 1.3rem !important;
+            margin-bottom: 1rem !important;
+            color: #1a1d23;
+            letter-spacing: -0.01em;
+        }
+        section[data-testid="stSidebar"] label {
+            font-size: 0.78rem !important;
+            font-weight: 600 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #4a5160 !important;
+        }
+        section[data-testid="stSidebar"] hr {
+            margin: 1.2rem 0;
+            border-color: #d8dce3;
+        }
+        section[data-testid="stSidebar"] small,
+        section[data-testid="stSidebar"] .stCaption {
+            color: #6b7280 !important;
+            font-size: 0.78rem !important;
+            line-height: 1.4 !important;
+        }
+        /* Make the radio navigation feel more like a sidebar menu */
+        section[data-testid="stSidebar"] div[role="radiogroup"] label {
+            text-transform: none !important;
+            letter-spacing: 0 !important;
+            font-size: 0.92rem !important;
+            font-weight: 500 !important;
+            color: #1a1d23 !important;
+            padding: 0.35rem 0;
+        }
+        /* Text input inside sidebar — slightly more refined */
+        section[data-testid="stSidebar"] input[type="text"] {
+            font-size: 0.85rem !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -260,23 +305,32 @@ def latest_inception(data_dir: str, fund_names: list):
 # Sidebar
 # ----------------------------------------------------------------------------
 
-st.sidebar.title("📈 MF Analysis")
-data_dir = st.sidebar.text_input("Data folder", value=DEFAULT_DATA_DIR,
-                                 help="Folder containing the .xlsx files")
+st.sidebar.markdown("# 📈 MF Analysis")
+st.sidebar.caption("Indian mutual fund dashboard")
 
-if not os.path.isdir(data_dir):
-    st.error(f"Data folder `{data_dir}` not found. Update the path in the sidebar.")
-    st.stop()
-
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Navigation**")
 page = st.sidebar.radio(
-    "Analysis",
+    "Navigation",
     ["Performance Graph", "Rolling Returns", "Category Leaderboard"],
+    label_visibility="collapsed",
 )
 
 st.sidebar.markdown("---")
+with st.sidebar.expander("⚙️ Settings", expanded=False):
+    data_dir = st.text_input(
+        "Data folder", value=DEFAULT_DATA_DIR,
+        help="Folder containing the .xlsx files",
+    )
+
+if not os.path.isdir(data_dir):
+    st.error(f"Data folder `{data_dir}` not found. Update the path in the sidebar settings.")
+    st.stop()
+
+st.sidebar.markdown("---")
 st.sidebar.caption(
-    "Returns from Adjusted NAVs. Periods > 1Y are CAGR; ≤ 1Y are absolute. "
-    "NAV gaps are forward-filled for rolling computations."
+    "Returns from Adjusted NAVs. Periods > 1Y are CAGR; "
+    "≤ 1Y are absolute returns. NAV gaps are forward-filled for rolling computations."
 )
 
 with st.spinner("Indexing fund universe..."):
@@ -373,18 +427,37 @@ if page == "Performance Graph":
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader(f"Period returns (as of {end_ts.date()})")
-    st.caption("≤ 1 year: absolute return. > 1 year: CAGR. Values in %.")
+    st.caption("≤ 1 year: absolute return. > 1 year: CAGR. Bars scale across each column.")
 
     pdf = pd.DataFrame(period_rows)
     cols = ["Name", "Type"] + list(PERIOD_DAYS.keys())
     pdf = pdf[cols]
-    numeric_cols = list(PERIOD_DAYS.keys())
-    styled = (
-        pdf.style
-        .format({c: "{:.2f}" for c in numeric_cols}, na_rep="—")
-        .background_gradient(subset=numeric_cols, cmap="RdYlGn", axis=0)
-    )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # Use Streamlit's native ProgressColumn for visual emphasis (no matplotlib needed).
+    # Each numeric column gets a horizontal bar scaled to its min/max range, plus the
+    # actual % value displayed inside.
+    column_config = {
+        "Name": st.column_config.TextColumn("Fund / Index", width="large"),
+        "Type": st.column_config.TextColumn("Type", width="small"),
+    }
+    for p in PERIOD_DAYS:
+        vals = pdf[p].dropna()
+        if vals.empty:
+            column_config[p] = st.column_config.NumberColumn(p, format="%.2f%%")
+        else:
+            vmin = float(vals.min())
+            vmax = float(vals.max())
+            # Add a small pad so the smallest bar is still visible
+            pad = max(abs(vmax - vmin) * 0.05, 0.1)
+            column_config[p] = st.column_config.ProgressColumn(
+                p,
+                format="%.2f%%",
+                min_value=vmin - pad,
+                max_value=vmax + pad,
+            )
+
+    st.dataframe(pdf, use_container_width=True, hide_index=True,
+                 column_config=column_config)
 
 
 # ============================================================================
