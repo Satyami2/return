@@ -285,6 +285,38 @@ st.sidebar.caption(f"Funds loaded: {n_total} ({n_base} base + {n_total - n_base}
 
 
 # ----------------------------------------------------------------------------
+# Styling helper (RdYlGn gradient without matplotlib)
+# ----------------------------------------------------------------------------
+
+def _rdylgn(t: float):
+    """Red -> yellow -> green colour for t in [0, 1]. No matplotlib needed."""
+    stops = [(0.0, (215, 48, 39)), (0.5, (255, 255, 191)), (1.0, (26, 152, 80))]
+    if t <= 0:
+        return stops[0][1]
+    if t >= 1:
+        return stops[-1][1]
+    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+        if t0 <= t <= t1:
+            f = (t - t0) / (t1 - t0)
+            return tuple(round(a + (b - a) * f) for a, b in zip(c0, c1))
+    return stops[-1][1]
+
+
+def gradient_bg(col: pd.Series):
+    """Per-column background colours scaled between the column's min and max."""
+    vals = pd.to_numeric(col, errors="coerce")
+    vmin, vmax = vals.min(), vals.max()
+    styles = []
+    for v in vals:
+        if pd.isna(v) or pd.isna(vmin) or vmax == vmin:
+            styles.append("")
+        else:
+            r, g, b = _rdylgn((v - vmin) / (vmax - vmin))
+            styles.append(f"background-color: rgb({r},{g},{b}); color: #111827;")
+    return styles
+
+
+# ----------------------------------------------------------------------------
 # Tabs
 # ----------------------------------------------------------------------------
 
@@ -309,7 +341,7 @@ with tab_all:
         mcols = [f"Median {w}Y %" for w in ROLLING_WINDOWS]
         styler = (view.style
                   .format({c: "{:.2f}%" for c in mcols}, na_rep="--")
-                  .background_gradient(cmap="RdYlGn", subset=mcols)
+                  .apply(gradient_bg, subset=mcols, axis=0)
                   .set_properties(subset=mcols, **{"font-weight": "600"}))
 
         st.dataframe(styler, use_container_width=True, hide_index=True,
