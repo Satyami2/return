@@ -128,6 +128,13 @@ INDEX_FILES = {
     "Nifty Smallcap 100":  "niftysmallcap100.xlsx",
 }
 
+# Single combined file (same ACE MF layout as the per-category fund files) that
+# carries the most recent ~1 year of NAVs for every fund across all categories.
+# For funds that already exist in a category, its rows are overlaid on top of
+# the base history, so the recent window is sourced from this fresher export.
+# Leave the file absent and the app behaves exactly as before.
+UPDATE_FILE = "1yearfundsallcartegories.xlsx"
+
 CATEGORY_DEFAULT_INDEX = {
     "Large Cap":         "NIFTY 50",
     "Large & Mid Cap":   "NIFTY 500",
@@ -164,6 +171,17 @@ def load_fund_file(path: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
+def load_update_file(data_dir: str) -> pd.DataFrame:
+    """Optional combined file that extends every category's NAV history with the
+    most recent ~1 year. Same layout as the per-category fund files. Returns an
+    empty frame if the file is not present, so the app still runs without it."""
+    path = os.path.join(data_dir, UPDATE_FILE)
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["Date"])
+    return load_fund_file(path)
+
+
+@st.cache_data(show_spinner=False)
 def load_index_file(path: str) -> pd.DataFrame:
     df = pd.read_excel(path, header=2)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -175,8 +193,9 @@ def load_index_file(path: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=True)
 def load_category(data_dir: str, category: str) -> pd.DataFrame:
-    """Load and merge all fund files for a category. Tolerates missing files
-    (e.g. only largecap1.xlsx present without largecap2.xlsx)."""
+    """Load and merge all fund files for a category, then extend the result with
+    the combined update file. Tolerates missing files (e.g. only largecap1.xlsx
+    present without largecap2.xlsx, or no update file at all)."""
     files = CATEGORY_FILES[category]
     frames = []
     for f in files:
@@ -188,7 +207,24 @@ def load_category(data_dir: str, category: str) -> pd.DataFrame:
     df = frames[0]
     for nxt in frames[1:]:
         df = pd.merge(df, nxt, on="Date", how="outer")
-    return df.sort_values("Date").reset_index(drop=True)
+    df = df.sort_values("Date").reset_index(drop=True)
+
+    # ---- Extend with the combined update file ----------------------------
+    # For every fund already present in this category, overlay the newer NAVs
+    # (and any dates beyond the base file's end) on top of the base history.
+    # update() only writes where the new file has an actual value and only for
+    # shared columns, so older base data is never clobbered by a blank, and
+    # funds missing from the update file simply keep their existing history.
+    upd = load_update_file(data_dir)
+    if not upd.empty:
+        shared = [c for c in df.columns if c != "Date" and c in upd.columns]
+        if shared:
+            base = df.set_index("Date")
+            add = upd.set_index("Date")[shared]
+            base = base.reindex(base.index.union(add.index))  # add new recent dates
+            base.update(add)                                   # overlay fresh values
+            df = base.sort_index().reset_index()
+    return df
 
 
 @st.cache_data(show_spinner=False)
@@ -357,6 +393,11 @@ st.sidebar.caption(
     "Returns from Adjusted NAVs. Periods > 1Y are CAGR; "
     "≤ 1Y are absolute returns. NAV gaps are forward-filled for rolling computations."
 )
+
+# Small note so it's obvious whether the recent-year update file was picked up.
+if os.path.exists(os.path.join(data_dir, UPDATE_FILE)):
+    st.sidebar.caption(f"✅ Recent-year update file detected (`{UPDATE_FILE}`) — "
+                       "fund NAVs extended to its latest date.")
 
 with st.spinner("Indexing fund universe..."):
     universe = get_fund_universe(data_dir)
