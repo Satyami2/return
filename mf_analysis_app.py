@@ -6,19 +6,25 @@ Two tabs:
   2. Compare    — interactive rolling-return chart for selected funds vs indices.
 
 Data sources (next to this script by default):
-  • Per-category fund files (wide, long history):
-      largecap1.xlsx, largecap2.xlsx, largeandmidcapa.xlsx, midcap.xlsx,
-      smallcap.xlsx, flexicap1.xlsx, flexicap2.xlsx, multicap.xlsx,
-      mulitassetallocation.xlsx
-  • Combined 1-year all-funds file (wide): 1yearfundsallcartegories.xlsx
+  • Per-category fund files (wide, long history). Files are discovered by
+    NAME PATTERN, so exact spelling doesn't matter:
+      largecap*.xlsx, largeandmid*.xlsx, midcap*.xlsx, smallcap*.xlsx,
+      flexicap*.xlsx, multicap*.xlsx, *multi*asset*.xlsx (multi asset allocation)
+  • Combined 1-year all-funds file (fresh data, wide): 1yearfundsallcartegories.xlsx
+    (any file starting with "1year" works)
   • Indices file (long: Index Name | Date | Close Price): indices.xlsx
 
-Every fund in either fund source is included; funds missing from the base files
-are slotted into a category inferred from the scheme name.
+Fresh data: the 1-year update file OVERWRITES/extends base history on
+overlapping dates, so re-exporting it keeps every fund current.
+
+Funds present only in the update file are slotted into a category inferred
+from the scheme name. Long-short / SIF schemes are always routed to the
+"Equity Long-Short / SIF" category by name, whichever file they sit in.
 
 Run:  streamlit run mf_analysis_app.py
 """
 
+import fnmatch
 import os
 import re
 from datetime import date, timedelta
@@ -51,25 +57,81 @@ st.markdown(
 
 DEFAULT_DATA_DIR = "."
 
-CATEGORY_FILES = {
-    "Large Cap":              ["largecap1.xlsx", "largecap2.xlsx"],
-    "Large & Mid Cap":        ["largeandmidcapa.xlsx"],
-    "Mid Cap":                ["midcap.xlsx"],
-    "Small Cap":              ["smallcap.xlsx"],
-    "Flexi Cap":              ["flexicap1.xlsx", "flexicap2.xlsx"],
-    "Multi Cap":              ["multicap.xlsx"],
-    "Multi Asset Allocation": ["mulitassetallocation.xlsx"],
+# Category -> filename patterns (case-insensitive, fnmatch style).
+# Order matters: first category whose pattern matches a file claims it.
+CATEGORY_PATTERNS = {
+    "Multi Asset Allocation": ["*mulit*asset*.xlsx", "*multi*asset*.xlsx",
+                               "*asset*allocation*.xlsx"],
+    "Large & Mid Cap":        ["largeandmid*.xlsx", "large and mid*.xlsx",
+                               "large&mid*.xlsx", "large_and_mid*.xlsx"],
+    "Large Cap":              ["largecap*.xlsx", "large cap*.xlsx", "large_cap*.xlsx"],
+    "Mid Cap":                ["midcap*.xlsx", "mid cap*.xlsx", "mid_cap*.xlsx"],
+    "Small Cap":              ["smallcap*.xlsx", "small cap*.xlsx", "small_cap*.xlsx"],
+    "Flexi Cap":              ["flexicap*.xlsx", "flexi cap*.xlsx", "flexi_cap*.xlsx"],
+    "Multi Cap":              ["multicap*.xlsx", "multi cap*.xlsx", "multi_cap*.xlsx"],
 }
 EXTRA_CATEGORIES = ["Equity Long-Short / SIF"]
-ALL_CATEGORIES = list(CATEGORY_FILES.keys()) + EXTRA_CATEGORIES
+ALL_CATEGORIES = list(CATEGORY_PATTERNS.keys()) + EXTRA_CATEGORIES
 
-UPDATE_FILE = "1yearfundsallcartegories.xlsx"
+# Files never treated as category files
+UPDATE_PATTERNS = ["1year*.xlsx"]
+SKIP_PATTERNS = UPDATE_PATTERNS + ["indices*.xlsx", "~$*"]
+
 INDICES_FILE = "indices.xlsx"
 
 ROLLING_WINDOWS = [1, 3, 5]  # years
 
 # ----------------------------------------------------------------------------
-# Category inference (funds not present in any base file)
+# File discovery + cache signature
+# ----------------------------------------------------------------------------
+
+def _match_any(name: str, patterns: list) -> bool:
+    return any(fnmatch.fnmatch(name, p) for p in patterns)
+
+
+def discover_files(data_dir: str) -> dict:
+    """Map category -> list of matching file paths in data_dir."""
+    out = {cat: [] for cat in CATEGORY_PATTERNS}
+    out["_update"] = []
+    try:
+        entries = sorted(os.listdir(data_dir))
+    except OSError:
+        return out
+    for fn in entries:
+        low = fn.lower()
+        if not low.endswith(".xlsx"):
+            continue
+        path = os.path.join(data_dir, fn)
+        if _match_any(low, [p.lower() for p in UPDATE_PATTERNS]):
+            out["_update"].append(path)
+            continue
+        if _match_any(low, [p.lower() for p in SKIP_PATTERNS]):
+            continue
+        for cat, pats in CATEGORY_PATTERNS.items():
+            if _match_any(low, [p.lower() for p in pats]):
+                out[cat].append(path)
+                break
+    return out
+
+
+def dir_signature(data_dir: str) -> str:
+    """Changes whenever any xlsx in the folder is added/removed/modified.
+    Used as a cache key so fresh data invalidates old caches automatically."""
+    parts = []
+    try:
+        for fn in sorted(os.listdir(data_dir)):
+            if fn.lower().endswith(".xlsx"):
+                p = os.path.join(data_dir, fn)
+                try:
+                    parts.append(f"{fn}:{int(os.path.getmtime(p))}:{os.path.getsize(p)}")
+                except OSError:
+                    parts.append(fn)
+    except OSError:
+        pass
+    return "|".join(parts)
+
+# ----------------------------------------------------------------------------
+# Category inference by scheme name
 # ----------------------------------------------------------------------------
 
 def infer_category(name: str) -> str:
@@ -77,7 +139,7 @@ def infer_category(name: str) -> str:
     n = re.sub(r"\s+", " ", n)
     if "long short" in n or "ex top 100" in n:
         return "Equity Long-Short / SIF"
-    if "multi asset" in n:
+    if "multi asset" in n or "multi-asset" in n:
         return "Multi Asset Allocation"
     if "large and mid" in n or ("large" in n and "mid" in n):
         return "Large & Mid Cap"
@@ -94,11 +156,11 @@ def infer_category(name: str) -> str:
     return "Multi Cap"
 
 # ----------------------------------------------------------------------------
-# Data loading (cached)
+# Data loading (cached; `sig` invalidates caches when files change)
 # ----------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def load_fund_file(path: str) -> pd.DataFrame:
+def load_fund_file(path: str, sig: str) -> pd.DataFrame:
     df = pd.read_excel(path, header=2, skiprows=[3])
     df = df.rename(columns={df.columns[0]: "Date"})
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -109,15 +171,20 @@ def load_fund_file(path: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_update_file(data_dir: str) -> pd.DataFrame:
-    path = os.path.join(data_dir, UPDATE_FILE)
-    if not os.path.exists(path):
+def load_update_file(data_dir: str, sig: str) -> pd.DataFrame:
+    paths = discover_files(data_dir)["_update"]
+    frames = [load_fund_file(p, sig) for p in paths]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
         return pd.DataFrame(columns=["Date"])
-    return load_fund_file(path)
+    base = frames[0]
+    for nxt in frames[1:]:
+        base = pd.merge(base, nxt, on="Date", how="outer")
+    return base.sort_values("Date").reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
-def load_indices(data_dir: str) -> dict:
+def load_indices(data_dir: str, sig: str) -> dict:
     path = os.path.join(data_dir, INDICES_FILE)
     if not os.path.exists(path):
         return {}
@@ -139,23 +206,28 @@ def load_indices(data_dir: str) -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def get_base_categories(data_dir: str) -> dict:
+def get_base_categories(data_dir: str, sig: str) -> dict:
+    """Fund -> category from base files. Long-short/SIF names are overridden
+    by name so they land in the SIF bucket even when they sit inside a
+    category file (e.g. SIF schemes exported inside the multi-asset file)."""
     m = {}
-    for cat, files in CATEGORY_FILES.items():
-        for f in files:
-            path = os.path.join(data_dir, f)
-            if os.path.exists(path):
-                df = load_fund_file(path)
-                for c in df.columns:
-                    if c != "Date":
-                        m.setdefault(c, cat)
+    files = discover_files(data_dir)
+    for cat in CATEGORY_PATTERNS:
+        for path in files[cat]:
+            df = load_fund_file(path, sig)
+            for c in df.columns:
+                if c == "Date":
+                    continue
+                inferred = infer_category(c)
+                assigned = inferred if inferred == "Equity Long-Short / SIF" else cat
+                m.setdefault(c, assigned)
     return m
 
 
 @st.cache_data(show_spinner=True)
-def get_fund_universe(data_dir: str) -> dict:
-    universe = dict(get_base_categories(data_dir))
-    upd = load_update_file(data_dir)
+def get_fund_universe(data_dir: str, sig: str) -> dict:
+    universe = dict(get_base_categories(data_dir, sig))
+    upd = load_update_file(data_dir, sig)
     for c in upd.columns:
         if c != "Date" and c not in universe:
             universe[c] = infer_category(c)
@@ -163,12 +235,12 @@ def get_fund_universe(data_dir: str) -> dict:
 
 
 @st.cache_data(show_spinner=True)
-def load_category(data_dir: str, category: str) -> pd.DataFrame:
-    frames = []
-    for f in CATEGORY_FILES.get(category, []):
-        path = os.path.join(data_dir, f)
-        if os.path.exists(path):
-            frames.append(load_fund_file(path))
+def load_category(data_dir: str, category: str, sig: str) -> pd.DataFrame:
+    """Long history from base files + fresh data from the update file.
+    Update-file NAVs win on overlapping dates."""
+    files = discover_files(data_dir)
+    frames = [load_fund_file(p, sig) for p in files.get(category, [])]
+    frames = [f for f in frames if not f.empty]
     if frames:
         base = frames[0]
         for nxt in frames[1:]:
@@ -177,7 +249,7 @@ def load_category(data_dir: str, category: str) -> pd.DataFrame:
     else:
         base = pd.DataFrame(columns=["Date"])
 
-    universe = get_fund_universe(data_dir)
+    universe = get_fund_universe(data_dir, sig)
     target = [f for f, c in universe.items() if c == category]
     if not target:
         return pd.DataFrame(columns=["Date"])
@@ -190,13 +262,30 @@ def load_category(data_dir: str, category: str) -> pd.DataFrame:
         if f not in merged.columns:
             merged[f] = np.nan
 
-    upd = load_update_file(data_dir)
+    # Funds classified into this category by NAME may physically live in a
+    # different base file (e.g. SIF long-short schemes exported inside the
+    # multi-asset file). Pull their history from wherever it sits.
+    missing = [f for f in target if f not in merged.columns or merged[f].isna().all()]
+    if missing:
+        for cat2, paths in files.items():
+            if cat2 in ("_update", category) or not missing:
+                continue
+            for p in paths:
+                df2 = load_fund_file(p, sig)
+                cols = [c for c in missing if c in df2.columns]
+                if cols:
+                    add = df2.set_index("Date")[cols]
+                    merged = merged.reindex(merged.index.union(add.index))
+                    merged.update(add)
+                    missing = [c for c in missing if c not in cols]
+
+    upd = load_update_file(data_dir, sig)
     if not upd.empty:
         cols = [f for f in target if f in upd.columns]
         if cols:
             add = upd.set_index("Date")[cols]
             merged = merged.reindex(merged.index.union(add.index))
-            merged.update(add)
+            merged.update(add)  # fresh data overwrites base on overlap
 
     keep = [f for f in target if f in merged.columns]
     return merged[keep].sort_index().reset_index()
@@ -206,17 +295,17 @@ def load_category(data_dir: str, category: str) -> pd.DataFrame:
 # Analysis
 # ----------------------------------------------------------------------------
 
-def get_index_series(data_dir: str, name: str) -> pd.DataFrame:
-    return load_indices(data_dir).get(name, pd.DataFrame(columns=["Date", "Value"]))
+def get_index_series(data_dir: str, name: str, sig: str) -> pd.DataFrame:
+    return load_indices(data_dir, sig).get(name, pd.DataFrame(columns=["Date", "Value"]))
 
 
-def get_series(data_dir: str, name: str, kind: str) -> pd.DataFrame:
+def get_series(data_dir: str, name: str, kind: str, sig: str) -> pd.DataFrame:
     if kind == "index":
-        return get_index_series(data_dir, name)
-    cat = get_fund_universe(data_dir).get(name)
+        return get_index_series(data_dir, name, sig)
+    cat = get_fund_universe(data_dir, sig).get(name)
     if cat is None:
         return pd.DataFrame(columns=["Date", "Value"])
-    df = load_category(data_dir, cat)
+    df = load_category(data_dir, cat, sig)
     if name not in df.columns:
         return pd.DataFrame(columns=["Date", "Value"])
     return df[["Date", name]].dropna().rename(columns={name: "Value"}).reset_index(drop=True)
@@ -233,11 +322,11 @@ def rolling_returns(series: pd.DataFrame, window_years: int) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=True)
-def fund_rolling_medians(data_dir: str) -> pd.DataFrame:
+def fund_rolling_medians(data_dir: str, sig: str) -> pd.DataFrame:
     """Median rolling 1Y/3Y/5Y return for every fund, over its full history."""
     rows = []
     for cat in ALL_CATEGORIES:
-        df = load_category(data_dir, cat)
+        df = load_category(data_dir, cat, sig)
         for fund in [c for c in df.columns if c != "Date"]:
             s = df[["Date", fund]].dropna().rename(columns={fund: "Value"})
             if s.empty:
@@ -255,7 +344,7 @@ def fund_rolling_medians(data_dir: str) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------
-# Sidebar (settings only)
+# Sidebar
 # ----------------------------------------------------------------------------
 
 st.sidebar.markdown("# 📈 Fund Rolling Returns")
@@ -269,23 +358,48 @@ if not os.path.isdir(data_dir):
     st.error(f"Data folder `{data_dir}` not found. Update the path in the sidebar settings.")
     st.stop()
 
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Rolling returns are daily rolling CAGR over the chosen window. NAV gaps are "
-    "forward-filled. Medians in the All Funds tab are over each fund's full history."
-)
+if st.sidebar.button("🔄 Reload data", use_container_width=True,
+                     help="Clear caches and re-read all files"):
+    st.cache_data.clear()
+    st.rerun()
+
+sig = dir_signature(data_dir)
 
 with st.spinner("Indexing fund universe..."):
-    universe = get_fund_universe(data_dir)
+    universe = get_fund_universe(data_dir, sig)
 
-indices = load_indices(data_dir)
+indices = load_indices(data_dir, sig)
 index_options = list(indices.keys())
 default_index = ["NIFTY 50"] if "NIFTY 50" in indices else (index_options[:1] if index_options else [])
 
-n_base = len(get_base_categories(data_dir))
+n_base = len(get_base_categories(data_dir, sig))
 n_total = len(universe)
-st.sidebar.caption(f"Funds loaded: {n_total} ({n_base} base + {n_total - n_base} combined). "
+st.sidebar.caption(f"Funds loaded: {n_total} ({n_base} base + {n_total - n_base} update-only). "
                    f"Indices: {len(index_options)}.")
+
+# Diagnostics: which files were matched to which category
+with st.sidebar.expander("Data files detected", expanded=False):
+    found = discover_files(data_dir)
+    for cat in CATEGORY_PATTERNS:
+        names = [os.path.basename(p) for p in found[cat]]
+        n_funds = sum(1 for c in universe.values() if c == cat)
+        if names:
+            st.markdown(f"**{cat}** — {n_funds} funds  \n" +
+                        "  \n".join(f"`{n}`" for n in names))
+        else:
+            st.markdown(f"**{cat}** — ⚠️ no file found")
+    n_sif = sum(1 for c in universe.values() if c == "Equity Long-Short / SIF")
+    st.markdown(f"**Equity Long-Short / SIF** — {n_sif} funds (by name)")
+    upd_names = [os.path.basename(p) for p in found["_update"]]
+    st.markdown("**Fresh data (update)** — " +
+                (", ".join(f"`{n}`" for n in upd_names) if upd_names else "⚠️ not found"))
+
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    "Rolling returns are daily rolling CAGR over the chosen window. NAV gaps are "
+    "forward-filled. Medians in the All Funds tab are over each fund's full history. "
+    "The 1-year update file overwrites base data on overlapping dates."
+)
 
 
 # ----------------------------------------------------------------------------
@@ -333,7 +447,7 @@ with tab_all:
     st.caption("Median of each fund's daily rolling CAGR (1Y, 3Y, 5Y) over its full "
                "history. Greener = higher within each column. Blank = not enough history.")
 
-    med = fund_rolling_medians(data_dir)
+    med = fund_rolling_medians(data_dir, sig)
     if med.empty:
         st.warning("No fund data found.")
     else:
@@ -391,7 +505,7 @@ with tab_cmp:
 
         plot_rows, stat_rows = [], []
         for name, kind in items:
-            s = get_series(data_dir, name, kind)
+            s = get_series(data_dir, name, kind, sig)
             if s.empty:
                 continue
             rr = rolling_returns(s, window)
