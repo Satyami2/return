@@ -394,12 +394,7 @@ with st.sidebar.expander("Data files detected", expanded=False):
     st.markdown("**Fresh data (update)** — " +
                 (", ".join(f"`{n}`" for n in upd_names) if upd_names else "⚠️ not found"))
 
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Rolling returns are daily rolling CAGR over the chosen window. NAV gaps are "
-    "forward-filled. Medians in the All Funds tab are over each fund's full history. "
-    "The 1-year update file overwrites base data on overlapping dates."
-)
+
 
 
 # ----------------------------------------------------------------------------
@@ -493,6 +488,9 @@ with tab_cmp:
     with opt_col:
         window = st.radio("Rolling window", options=ROLLING_WINDOWS, index=1,
                           format_func=lambda x: f"{x}-Year", horizontal=True, key="c_win")
+        align_common = st.checkbox("Align to common dates", value=True, key="c_align",
+                                   help="Restrict all lines to the period where every "
+                                        "selected fund/index has data, for a fair comparison.")
         today = date.today()
         start_date = st.date_input("Plot from", value=today - timedelta(days=365 * 10),
                                    min_value=date(1990, 1, 1), max_value=today, key="c_sd")
@@ -503,13 +501,35 @@ with tab_cmp:
         start_ts = pd.Timestamp(start_date)
         items = [(f, "fund") for f in selected_funds] + [(i, "index") for i in selected_indices]
 
-        plot_rows, stat_rows = [], []
+        # First pass: compute rolling returns for every selection
+        series_rr = {}
         for name, kind in items:
             s = get_series(data_dir, name, kind, sig)
-            if s.empty:
-                continue
-            rr = rolling_returns(s, window)
-            rr = rr[rr["Date"] >= start_ts]
+            rr = rolling_returns(s, window) if not s.empty else pd.DataFrame(columns=["Date", "Return"])
+            series_rr[(name, kind)] = rr
+
+        # Common window = latest start to earliest end across all non-empty series
+        non_empty = [rr for rr in series_rr.values() if not rr.empty]
+        common_start = common_end = None
+        if align_common and len(non_empty) >= 2:
+            common_start = max(rr["Date"].min() for rr in non_empty)
+            common_end = min(rr["Date"].max() for rr in non_empty)
+            if common_start > common_end:
+                st.warning("Selected funds/indices have no overlapping history for this "
+                           "rolling window. Showing each over its own history instead.")
+                common_start = common_end = None
+            else:
+                st.caption(f"Common period: **{common_start.date()} → {common_end.date()}** "
+                           f"(all lines restricted to dates where every selection has data).")
+
+        eff_start = max(start_ts, common_start) if common_start is not None else start_ts
+
+        plot_rows, stat_rows = [], []
+        for name, kind in items:
+            rr = series_rr[(name, kind)]
+            rr = rr[rr["Date"] >= eff_start]
+            if common_end is not None:
+                rr = rr[rr["Date"] <= common_end]
             if rr.empty:
                 stat_rows.append({"Name": name, "Type": kind.capitalize(), "Note": "Not enough history"})
                 continue
