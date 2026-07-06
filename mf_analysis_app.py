@@ -8,7 +8,8 @@ Two tabs:
 Data sources (next to this script by default):
   • Per-category fund files (wide, long history):
       largecap1.xlsx, largecap2.xlsx, largeandmidcapa.xlsx, midcap.xlsx,
-      smallcap.xlsx, flexicap1.xlsx, flexicap2.xlsx, multicap.xlsx
+      smallcap.xlsx, flexicap1.xlsx, flexicap2.xlsx, multicap.xlsx,
+      mulitassetallocation.xlsx
   • Combined 1-year all-funds file (wide): 1yearfundsallcartegories.xlsx
   • Indices file (long: Index Name | Date | Close Price): indices.xlsx
 
@@ -51,12 +52,13 @@ st.markdown(
 DEFAULT_DATA_DIR = "."
 
 CATEGORY_FILES = {
-    "Large Cap":          ["largecap1.xlsx", "largecap2.xlsx"],
-    "Large & Mid Cap":    ["largeandmidcapa.xlsx"],
-    "Mid Cap":            ["midcap.xlsx"],
-    "Small Cap":          ["smallcap.xlsx"],
-    "Flexi Cap":          ["flexicap1.xlsx", "flexicap2.xlsx"],
-    "Multi Cap":          ["multicap.xlsx"],
+    "Large Cap":              ["largecap1.xlsx", "largecap2.xlsx"],
+    "Large & Mid Cap":        ["largeandmidcapa.xlsx"],
+    "Mid Cap":                ["midcap.xlsx"],
+    "Small Cap":              ["smallcap.xlsx"],
+    "Flexi Cap":              ["flexicap1.xlsx", "flexicap2.xlsx"],
+    "Multi Cap":              ["multicap.xlsx"],
+    "Multi Asset Allocation": ["mulitassetallocation.xlsx"],
 }
 EXTRA_CATEGORIES = ["Equity Long-Short / SIF"]
 ALL_CATEGORIES = list(CATEGORY_FILES.keys()) + EXTRA_CATEGORIES
@@ -75,6 +77,8 @@ def infer_category(name: str) -> str:
     n = re.sub(r"\s+", " ", n)
     if "long short" in n or "ex top 100" in n:
         return "Equity Long-Short / SIF"
+    if "multi asset" in n:
+        return "Multi Asset Allocation"
     if "large and mid" in n or ("large" in n and "mid" in n):
         return "Large & Mid Cap"
     if "flexi" in n:
