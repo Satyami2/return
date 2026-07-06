@@ -545,8 +545,6 @@ with tab_cmp:
                 "Min %": round(rr["Return %"].min(), 2),
                 "Max %": round(rr["Return %"].max(), 2),
                 "Std %": round(rr["Return %"].std(), 2),
-                "% > 0": round((rr["Return %"] > 0).mean() * 100, 1),
-                "Obs": len(rr),
             })
 
         if not plot_rows:
